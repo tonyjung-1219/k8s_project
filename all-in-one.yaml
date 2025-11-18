@@ -1,0 +1,593 @@
+# ---------------------------------------------------------
+# NAMESPACES
+# ---------------------------------------------------------
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: falco
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+---
+# ---------------------------------------------------------
+# FALCO CONFIGMAP (falco.yaml)
+# ---------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco
+  namespace: falco
+data:
+  falco.yaml: |-
+    append_output:
+    - suggested_output: true
+    base_syscalls:
+      all: false
+      custom_set: []
+      repair: false
+    buffer_format_base64: false
+    buffered_outputs: false
+    capture:
+      default_duration: 5000
+      enabled: false
+      mode: rules
+      path_prefix: /tmp/falco
+    config_files:
+    - /etc/falco/config.d
+    engine:
+      ebpf:
+        buf_size_preset: 4
+        drop_failed_exit: false
+        probe: ${HOME}/.falco/falco-bpf.o
+      kind: modern_ebpf
+      kmod:
+        buf_size_preset: 4
+        drop_failed_exit: false
+      modern_ebpf:
+        buf_size_preset: 4
+        cpus_for_each_buffer: 2
+        drop_failed_exit: false
+    falco_libs:
+      snaplen: 80
+      thread_table_auto_purging_interval_s: 300
+      thread_table_auto_purging_thread_timeout_s: 300
+      thread_table_size: 262144
+    file_output:
+      enabled: false
+      filename: ./events.txt
+      keep_alive: false
+    grpc:
+      bind_address: unix:///run/falco/falco.sock
+      enabled: false
+      threadiness: 0
+    grpc_output:
+      enabled: false
+    http_output:
+      ca_bundle: ""
+      ca_cert: ""
+      ca_path: /etc/falco/certs/
+      client_cert: /etc/falco/certs/client/client.crt
+      client_key: /etc/falco/certs/client/client.key
+      compress_uploads: false
+      echo: false
+      enabled: false
+      insecure: false
+      keep_alive: false
+      max_consecutive_timeouts: 5
+      mtls: false
+      url: ""
+      user_agent: falcosecurity/falco
+    json_include_message_property: false
+    json_include_output_fields_property: true
+    json_include_output_property: true
+    json_include_tags_property: true
+    json_output: false
+    libs_logger:
+      enabled: true
+      severity: info
+    load_plugins:
+    - container
+    log_level: info
+    log_stderr: true
+    log_syslog: true
+    metrics:
+      enabled: true
+      http_port: 8765
+      http_server: true
+      interval: 1s
+      output_type: prometheus
+    output_timeout: 2000
+    outputs_queue:
+      capacity: 0
+    plugins:
+    - init_config:
+        engines:
+          bpm:
+            enabled: true
+          containerd:
+            enabled: true
+            sockets:
+            - /run/host-containerd/containerd.sock
+          cri:
+            enabled: true
+            sockets:
+            - /run/containerd/containerd.sock
+            - /run/crio/crio.sock
+            - /run/k3s/containerd/containerd.sock
+            - /run/host-containerd/containerd.sock
+          docker:
+            enabled: true
+            sockets:
+            - /var/run/docker.sock
+          libvirt_lxc:
+            enabled: true
+          lxc:
+            enabled: true
+          podman:
+            enabled: true
+            sockets:
+            - /run/podman/podman.sock
+        hooks:
+        - create
+        label_max_len: 100
+        with_size: false
+      library_path: libcontainer.so
+      name: container
+    plugins_hostinfo: true
+    priority: debug
+    program_output:
+      enabled: false
+      keep_alive: false
+      program: 'jq ''{text: .output}'' | curl -d @- -X POST https://hooks.slack.com/services/XXX'
+    rule_matching: first
+    rules_files:
+    - /etc/falco/falco_rules.yaml
+    - /etc/falco/falco_rules.local.yaml
+    - /etc/falco/rules.d
+    stdout_output:
+      enabled: true
+    syscall_event_drops:
+      actions:
+      - log
+      - alert
+      max_burst: 1
+      rate: 0.03333
+      simulate_drops: false
+      threshold: 0.1
+    syscall_event_timeouts:
+      max_consecutives: 1000
+    syslog_output:
+      enabled: true
+    time_format_iso_8601: false
+    watch_config_files: true
+    webserver:
+      enabled: true
+      k8s_healthz_endpoint: /healthz
+      listen_address: 0.0.0.0
+      listen_port: 8765
+      prometheus_metrics_enabled: true
+      ssl_certificate: /etc/falco/falco.pem
+      ssl_enabled: false
+      threadiness: 0
+---
+# ---------------------------------------------------------
+# FALCO SERVICE ACCOUNTS
+# ---------------------------------------------------------
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: falco
+  namespace: falco
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: falcosidekick
+  namespace: falco
+---
+# ---------------------------------------------------------
+# FALCO DAEMONSET
+# ---------------------------------------------------------
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: falco
+  namespace: falco
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: falco
+      app.kubernetes.io/name: falco
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: falco
+        app.kubernetes.io/name: falco
+    spec:
+      serviceAccountName: falco
+      containers:
+      - name: falco
+        image: docker.io/falcosecurity/falco:0.42.1
+        imagePullPolicy: IfNotPresent
+        args: ["/usr/bin/falco"]
+        env:
+        - name: HOST_ROOT
+          value: /host
+        - name: FALCO_HOSTNAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: FALCO_K8S_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        ports:
+        - name: web
+          containerPort: 8765
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: container-engine-socket-0
+          mountPath: /host/var/run/docker.sock
+        - name: container-engine-socket-1
+          mountPath: /host/run/podman/podman.sock
+        - name: container-engine-socket-2
+          mountPath: /host/run/host-containerd/containerd.sock
+        - name: container-engine-socket-3
+          mountPath: /host/run/containerd/containerd.sock
+        - name: container-engine-socket-4
+          mountPath: /host/run/crio/crio.sock
+        - name: container-engine-socket-5
+          mountPath: /host/run/k3s/containerd/containerd.sock
+        - name: rulesfiles-install-dir
+          mountPath: /etc/falco
+        - name: plugins-install-dir
+          mountPath: /usr/share/falco/plugins
+        - name: specialized-falco-configs
+          mountPath: /etc/falco/config.d
+        - name: root-falco-fs
+          mountPath: /root/.falco
+        - name: proc-fs
+          mountPath: /host/proc
+        - name: etc-fs
+          mountPath: /host/etc
+          readOnly: true
+        - name: dev-fs
+          mountPath: /host/dev
+          readOnly: true
+        - name: sys-module-fs
+          mountPath: /sys/module
+        - name: sys-fs
+          mountPath: /sys/kernel
+          readOnly: true
+        - name: falco-yaml
+          mountPath: /etc/falco/falco.yaml
+          subPath: falco.yaml
+      initContainers:
+      - name: falco-driver-loader
+        image: docker.io/falcosecurity/falco-driver-loader:0.42.1
+        securityContext:
+          privileged: true
+        args: ["auto"]
+        env:
+        - name: HOST_ROOT
+          value: /host
+        volumeMounts:
+        - name: root-falco-fs
+          mountPath: /root/.falco
+      volumes:
+      - name: container-engine-socket-0
+        hostPath: { path: /var/run/docker.sock }
+      - name: container-engine-socket-1
+        hostPath: { path: /run/podman/podman.sock }
+      - name: container-engine-socket-2
+        hostPath: { path: /run/host-containerd/containerd.sock }
+      - name: container-engine-socket-3
+        hostPath: { path: /run/containerd/containerd.sock }
+      - name: container-engine-socket-4
+        hostPath: { path: /run/crio/crio.sock }
+      - name: container-engine-socket-5
+        hostPath: { path: /run/k3s/containerd/containerd.sock }
+      - name: rulesfiles-install-dir
+        emptyDir: {}
+      - name: plugins-install-dir
+        emptyDir: {}
+      - name: specialized-falco-configs
+        emptyDir: {}
+      - name: root-falco-fs
+        emptyDir: {}
+      - name: proc-fs
+        hostPath: { path: /proc }
+      - name: etc-fs
+        hostPath: { path: /etc }
+      - name: dev-fs
+        hostPath: { path: /dev }
+      - name: sys-module-fs
+        hostPath: { path: /sys/module }
+      - name: sys-fs
+        hostPath: { path: /sys/kernel }
+      - name: falco-yaml
+        configMap:
+          name: falco
+          items:
+          - key: falco.yaml
+            path: falco.yaml
+---
+# ---------------------------------------------------------
+# FALCOSIDEKICK DEPLOYMENT
+# ---------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: falcosidekick
+  namespace: falco
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: falcosidekick
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: falcosidekick
+        app.kubernetes.io/instance: falcosidekick
+        app.kubernetes.io/component: core
+    spec:
+      serviceAccountName: falcosidekick
+      containers:
+      - name: falcosidekick
+        image: docker.io/falcosecurity/falcosidekick:2.32.0
+        ports:
+        - containerPort: 2801
+          name: http
+        - containerPort: 2810
+          name: http-notls
+---
+# ---------------------------------------------------------
+# FALCOSIDEKICK SERVICE
+# ---------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: falcosidekick
+  namespace: falco
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: falcosidekick
+  ports:
+  - name: http
+    port: 2801
+    targetPort: http
+  - name: http-notls
+    port: 2810
+    targetPort: http-notls
+# ---------------------------------------------------------
+# PROMTAIL SERVICEACCOUNT
+# ---------------------------------------------------------
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: loki-promtail
+  namespace: monitoring
+---
+# ---------------------------------------------------------
+# PROMTAIL CLUSTERROLE
+# ---------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: loki-promtail
+rules:
+- apiGroups: [""]
+  resources:
+  - nodes
+  - nodes/proxy
+  - services
+  - endpoints
+  - pods
+  verbs:
+  - get
+  - watch
+  - list
+---
+# ---------------------------------------------------------
+# PROMTAIL CLUSTERROLEBINDING
+# ---------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: loki-promtail
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: loki-promtail
+subjects:
+- kind: ServiceAccount
+  name: loki-promtail
+  namespace: monitoring
+---
+# ---------------------------------------------------------
+# PROMTAIL SECRET (BASE64 PROMTAIL.YAML)
+# ---------------------------------------------------------
+apiVersion: v1
+kind: Secret
+metadata:
+  name: loki-promtail
+  namespace: monitoring
+type: Opaque
+data:
+  promtail.yaml: |
+    c2VydmVyOgogIGxvZ19sZXZlbDogaW5mbwogIGxvZ19mb3JtYXQ6IGxvZ2ZtdAogIGh0dHBfbGlzdGVuX3BvcnQ6IDMxMDEKICAKCmNsaWVudHM6CiAgLSB1cmw6IGh0dHA6Ly9sb2tpOjMxMDAvbG9raS9hcGkvdjEvcHVzaAoKcG9zaXRpb25zOgogIGZpbGVuYW1lOiAvcnVuL3Byb210YWlsL3Bvc2l0aW9ucy55YW1sCgpzY3JhcGVfY29uZmlnczoKICAjIFNlZSBhbHNvIGh0dHBzOi8vZ2l0aHViLmNvbS9ncmFmYW5hL2xva2kvYmxvYi9tYXN0ZXIvcHJvZHVjdGlvbi9rc29ubmV0L3Byb210YWlsL3NjcmFwZV9jb25maWcubGlic29ubmV0IGZvciByZWZlcmVuY2UKICAtIGpvYl9uYW1lOiBrdWJlcm5ldGVzLXBvZHMKICAgIHBpcGVsaW5lX3N0YWdlczoKICAgICAgLSBjcmk6IHt9CiAgICBrdWJlcm5ldGVzX3NkX2NvbmZpZ3M6CiAgICAgIC0gcm9sZTogcG9kCiAgICByZWxhYmVsX2NvbmZpZ3M6CiAgICAgIC0gc291cmNlX2xhYmVsczoKICAgICAgICAgIC0gX19tZXRhX2t1YmVybmV0ZXNfcG9kX2NvbnRyb2xsZXJfbmFtZQogICAgICAgIHJlZ2V4OiAoWzAtOWEtei0uXSs/KSgtWzAtOWEtZl17OCwxMH0pPwogICAgICAgIGFjdGlvbjogcmVwbGFjZQogICAgICAgIHRhcmdldF9sYWJlbDogX190bXBfY29udHJvbGxlcl9uYW1lCiAgICAgIC0gc291cmNlX2xhYmVsczoKICAgICAgICAgIC0gX19tZXRhX2t1YmVybmV0ZXNfcG9kX2xhYmVsX2FwcF9rdWJlcm5ldGVzX2lvX25hbWUKICAgICAgICAgIC0gX19tZXRhX2t1YmVybmV0ZXNfcG9kX2xhYmVsX2FwcAogICAgICAgICAgLSBfX3RtcF9jb250cm9sbGVyX25hbWUKICAgICAgICAgIC0gX19tZXRhX2t1YmVybmV0ZXNfcG9kX25hbWUKICAgICAgICByZWdleDogXjsqKFteO10rKSg7LiopPyQKICAgICAgICBhY3Rpb246IHJlcGxhY2UKICAgICAgICB0YXJnZXRfbGFiZWw6IGFwcAogICAgICAtIHNvdXJjZV9sYWJlbHM6CiAgICAgICAgICAtIF9fbWV0YV9rdWJlcm5ldGVzX3BvZF9sYWJlbF9hcHBfa3ViZXJuZXRlc19pb19pbnN0YW5jZQogICAgICAgICAgLSBfX21ldGFfa3ViZXJuZXRlc19wb2RfbGFiZWxfaW5zdGFuY2UKICAgICAgICByZWdleDogXjsqKFteO10rKSg7LiopPyQKICAgICAgICBhY3Rpb246IHJlcGxhY2UKICAgICAgICB0YXJnZXRfbGFiZWw6IGluc3RhbmNlCiAgICAgIC0gc291cmNlX2xhYmVsczoKICAgICAgICAgIC0gX19tZXRhX2t1YmVybmV0ZXNfcG9kX2xhYmVsX2FwcF9rdWJlcm5ldGVzX2lvX2NvbXBvbmVudAogICAgICAgICAgLSBfX21ldGFfa3ViZXJuZXRlc19wb2RfbGFiZWxfY29tcG9uZW50CiAgICAgICAgcmVnZXg6IF47KihbXjtdKykoOy4qKT8kCiAgICAgICAgYWN0aW9uOiByZXBsYWNlCiAgICAgICAgdGFyZ2V0X2xhYmVsOiBjb21wb25lbnQKICAgICAgLSBhY3Rpb246IHJlcGxhY2UKICAgICAgICBzb3VyY2VfbGFiZWxzOgogICAgICAgIC0gX19tZXRhX2t1YmVybmV0ZXNfcG9kX25vZGVfbmFtZQogICAgICAgIHRhcmdldF9sYWJlbDogbm9kZV9uYW1lCiAgICAgIC0gYWN0aW9uOiByZXBsYWNlCiAgICAgICAgc291cmNlX2xhYmVsczoKICAgICAgICAtIF9fbWV0YV9rdWJlcm5ldGVzX25hbWVzcGFjZQogICAgICAgIHRhcmdldF9sYWJlbDogbmFtZXNwYWNlCiAgICAgIC0gYWN0aW9uOiByZXBsYWNlCiAgICAgICAgcmVwbGFjZW1lbnQ6ICQxCiAgICAgICAgc2VwYXJhdG9yOiAvCiAgICAgICAgc291cmNlX2xhYmVsczoKICAgICAgICAtIG5hbWVzcGFjZQogICAgICAgIC0gYXBwCiAgICAgICAgdGFyZ2V0X2xhYmVsOiBqb2IKICAgICAgLSBhY3Rpb246IHJlcGxhY2UKICAgICAgICBzb3VyY2VfbGFiZWxzOgogICAgICAgIC0gX19tZXRhX2t1YmVybmV0ZXNfcG9kX25hbWUKICAgICAgICB0YXJnZXRfbGFiZWw6IHBvZAogICAgICAtIGFjdGlvbjogcmVwbGFjZQogICAgICAgIHNvdXJjZV9sYWJlbHM6CiAgICAgICAgLSBfX21ldGFfa3ViZXJuZXRlc19wb2RfY29udGFpbmVyX25hbWUKICAgICAgICB0YXJnZXRfbGFiZWw6IGNvbnRhaW5lcgogICAgICAtIGFjdGlvbjogcmVwbGFjZQogICAgICAgIHJlcGxhY2VtZW50OiAvdmFyL2xvZy9wb2RzLyokMS8qLmxvZwogICAgICAgIHNlcGFyYXRvcjogLwogICAgICAgIHNvdXJjZV9sYWJlbHM6CiAgICAgICAgLSBfX21ldGFfa3ViZXJuZXRlc19wb2RfdWlkCiAgICAgICAgLSBfX21ldGFfa3ViZXJuZXRlc19wb2RfY29udGFpbmVyX25hbWUKICAgICAgICB0YXJnZXRfbGFiZWw6IF9fcGF0aF9fCiAgICAgIC0gYWN0aW9uOiByZXBsYWNlCiAgICAgICAgcmVnZXg6IHRydWUvKC4qKQogICAgICAgIHJlcGxhY2VtZW50OiAvdmFyL2xvZy9wb2RzLyokMS8qLmxvZwogICAgICAgIHNlcGFyYXRvcjogLwogICAgICAgIHNvdXJjZV9sYWJlbHM6CiAgICAgICAgLSBfX21ldGFfa3ViZXJuZXRlc19wb2RfYW5ub3RhdGlvbnByZXNlbnRfa3ViZXJuZXRlc19pb19jb25maWdfaGFzaAogICAgICAgIC0gX19tZXRhX2t1YmVybmV0ZXNfcG9kX2Fubm90YXRpb25fa3ViZXJuZXRlc19pb19jb25maWdfaGFzaAogICAgICAgIC0gX19tZXRhX2t1YmVybmV0ZXNfcG9kX2NvbnRhaW5lcl9uYW1lCiAgICAgICAgdGFyZ2V0X2xhYmVsOiBfX3BhdGhfXwogIAogIAoKbGltaXRzX2NvbmZpZzoKICAKCnRyYWNpbmc6CiAgZW5hYmxlZDogZmFsc2UK
+---
+# ---------------------------------------------------------
+# PROMTAIL DAEMONSET
+# ---------------------------------------------------------
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: loki-promtail
+  namespace: monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: promtail
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: promtail
+        app.kubernetes.io/instance: loki
+    spec:
+      serviceAccountName: loki-promtail
+      containers:
+      - name: promtail
+        image: docker.io/grafana/promtail:3.5.1
+        args:
+        - -config.file=/etc/promtail/promtail.yaml
+        volumeMounts:
+        - name: config
+          mountPath: /etc/promtail
+        - name: run
+          mountPath: /run/promtail
+        - name: containers
+          mountPath: /var/lib/docker/containers
+          readOnly: true
+        - name: pods
+          mountPath: /var/log/pods
+          readOnly: true
+      volumes:
+      - name: config
+        secret:
+          secretName: loki-promtail
+      - name: run
+        hostPath:
+          path: /run/promtail
+      - name: containers
+        hostPath:
+          path: /var/lib/docker/containers
+      - name: pods
+        hostPath:
+          path: /var/log/pods
+# ---------------------------------------------------------
+# LOKI SECRET (BASE64 loki.yaml 그대로 보존)
+# ---------------------------------------------------------
+apiVersion: v1
+kind: Secret
+metadata:
+  name: loki
+  namespace: monitoring
+type: Opaque
+data:
+  loki.yaml: |
+    YXV0aF9lbmFibGVkOiBmYWxzZQpjaHVua19zdG9yZV9jb25maWc6CiAgbWF4X2xv
+    b2tfYmFja19wZXJpb2Q6IDBzCmNvbXBhY3RvcjoKICBzaGFyZWRfc3RvcmU6IGZp
+    bGVzeXN0ZW0KICB3b3JraW5nX2RpcmVjdG9yeTogL2RhdGEvbG9raS9ib2x0ZGIt
+    c2hpcHBlci1jb21wYWN0b3IKaW5nZXN0ZXI6CiAgY2h1bmtfYmxvY2tfc2l6ZTog
+    MjYyMTQ0CiAgY2h1bmtfaWRsZV9wZXJpb2Q6IDNtCiAgY2h1bmtfcmV0YWluX3Bl
+    cmlvZDogMW0KICBsaWZlY3ljbGVyOgogICAgcmluZzoKICAgICAgcmVwbGljYXRp
+    b25fZmFjdG9yOiAxCiAgbWF4X3RyYW5zZmVyX3JldHJpZXM6IDAKICB3YWw6CiAg
+    ICBkaXI6IC9kYXRhL2xva2kvd2FsCmxpbWl0c19jb25maWc6CiAgZW5mb3JjZV9t
+    ZXRyaWNfbmFtZTogZmFsc2UKICBtYXhfZW50cmllc19saW1pdF9wZXJfcXVlcnk6
+    IDUwMDAKICByZWplY3Rfb2xkX3NhbXBsZXM6IHRydWUKICByZWplY3Rfb2xkX3Nh
+    bXBsZXNfbWF4X2FnZTogMTY4aAptZW1iZXJsaXN0OgogIGpvaW5fbWVtYmVyczoK
+    ICAtICdsb2tpLW1lbWJlcmxpc3QnCnNjaGVtYV9jb25maWc6CiAgY29uZmlnczoK
+    ICAtIGZyb206ICIyMDIwLTEwLTI0IgogICAgaW5kZXg6CiAgICAgIHBlcmlvZDog
+    MjRoCiAgICAgIHByZWZpeDogaW5kZXhfCiAgICBvYmplY3Rfc3RvcmU6IGZpbGVz
+    eXN0ZW0KICAgIHNjaGVtYTogdjExCiAgICBzdG9yZTogYm9sdGRiLXNoaXBwZXIK
+    c2VydmVyOgogIGdycGNfbGlzdGVuX3BvcnQ6IDkwOTUKICBodHRwX2xpc3Rlbl9w
+    b3J0OiAzMTAwCnN0b3JhZ2VfY29uZmlnOgogIGJvbHRkYl9zaGlwcGVyOgogICAg
+    YWN0aXZlX2luZGV4X2RpcmVjdG9yeTogL2RhdGEvbG9raS9ib2x0ZGItc2hpcHBl
+    ci1hY3RpdmUKICAgIGNhY2hlX2xvY2F0aW9uOiAvZGF0YS9sb2tpL2JvbHRkYi1z
+    aGlwcGVyLWNhY2hlCiAgICBjYWNoZV90dGw6IDI0aAogICAgc2hhcmVkX3N0b3Jl
+    OiBmaWxlc3lzdGVtCiAgZmlsZXN5c3RlbToKICAgIGRpcmVjdG9yeTogL2RhdGEv
+    bG9raS9jaHVua3MKdGFibGVfbWFuYWdlcjoKICByZXRlbnRpb25fZGVsZXRlc19l
+    bmFibGVkOiBmYWxzZQogIHJldGVudGlvbl9wZXJpb2Q6IDBz
+---
+# ---------------------------------------------------------
+# LOKI STATEFULSET
+# ---------------------------------------------------------
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: loki
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: loki
+      release: loki
+  serviceName: loki-headless
+  template:
+    metadata:
+      labels:
+        app: loki
+        release: loki
+    spec:
+      serviceAccountName: loki
+      securityContext:
+        fsGroup: 10001
+        runAsUser: 10001
+        runAsGroup: 10001
+        runAsNonRoot: true
+      containers:
+      - name: loki
+        image: grafana/loki:2.6.1
+        args:
+        - -config.file=/etc/loki/loki.yaml
+        ports:
+        - name: http-metrics
+          containerPort: 3100
+        - name: grpc
+          containerPort: 9095
+        - name: memberlist-port
+          containerPort: 7946
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: http-metrics
+          initialDelaySeconds: 45
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /ready
+            port: http-metrics
+          initialDelaySeconds: 45
+          periodSeconds: 10
+        volumeMounts:
+        - name: config
+          mountPath: /etc/loki
+        - name: tmp
+          mountPath: /tmp
+        - name: storage
+          mountPath: /data
+      volumes:
+      - name: config
+        secret:
+          secretName: loki
+      - name: tmp
+        emptyDir: {}
+      - name: storage
+        emptyDir: {}
+---
+# ---------------------------------------------------------
+# LOKI SERVICE
+# ---------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki
+  namespace: monitoring
+spec:
+  type: ClusterIP
+  selector:
+    app: loki
+    release: loki
+  ports:
+  - name: http-metrics
+    port: 3100
+    targetPort: http-metrics
+    protocol: TCP
+

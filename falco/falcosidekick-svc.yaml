@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: falcosidekick
+  namespace: falco
+  labels:
+    app.kubernetes.io/name: falcosidekick
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/component: core
+    app.kubernetes.io/instance: falcosidekick
+    app.kubernetes.io/name: falcosidekick
+  ports:
+  - name: http
+    port: 2801
+    protocol: TCP
+    targetPort: http
+  - name: http-notls
+    port: 2810
+    protocol: TCP
+    targetPort: http-notls
+
