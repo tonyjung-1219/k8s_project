@@ -1,4 +1,5 @@
 최신버전 falco-stack-all-in-one-gra.yaml
+
 직전버전 falco-stack-all-in-one-ver5.yaml
 
 -올인원파일에 그라파나는 포함이 안되어있으므로 별도로 monitoring 네임스페이스에 설치 요망 / 그라파나 대시보드는 UI가 아닌 필히 yaml 파일로 구성.
