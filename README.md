@@ -1,4 +1,4 @@
-최신버전 falco-stack-all-in-one-gradash.yaml   ->  falco부터 grafana 대시보드까지 한 번에 생성
+최신버전 falco-stack-all-in-one-gradash.yaml   ->  falco-praomtail-loki-grafana-grafana dashboard까지 한 번에 생성
 
 직전버전 falco-stack-all-in-one-ver5.yaml
 
