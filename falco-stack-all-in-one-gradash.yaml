@@ -583,6 +583,10 @@ stringData:
       parallelise_shardable_queries: true
       cache_results: false
 
+    compactor:
+      working_directory: /data/compactor
+      shared_store: filesystem
+
     ruler:
       storage:
         type: local
@@ -891,18 +895,12 @@ spec:
         volumeMounts:
         - name: grafana-storage
           mountPath: /var/lib/grafana
-
-        # 1) 데이터소스: 디렉터리 전체를 마운트
         - name: grafana-datasource-loki
           mountPath: /etc/grafana/provisioning/datasources
           readOnly: true
-
-        # 2) 대시보드 provider: 디렉터리 전체를 마운트
         - name: grafana-dashboard-provider-falcoloki
           mountPath: /etc/grafana/provisioning/dashboards
           readOnly: true
-
-        # 3) 실제 대시보드 JSON 파일 디렉터리
         - name: grafana-dashboard-falcoloki
           mountPath: /var/lib/grafana/dashboards
           readOnly: true
@@ -936,4 +934,3 @@ spec:
     targetPort: 3000
     nodePort: 32000
     name: http
-
